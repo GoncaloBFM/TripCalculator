@@ -16,8 +16,8 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 # dates to search for relevant trips
 YEAR = 2023
-FIRST_MONTH = 3 # inclusive
-LAST_MONTH = 10 # exclusive
+FIRST_MONTH = 3  # inclusive
+LAST_MONTH = 10  # inclusive
 
 STATIONS_TO_CHECK = ['Den Haag Centraal', 'Den Haag HS']  # station that is 100% in a trip to flag
 STATIONS_AT_END = ['Diemen Zuid', 'Laan van Ypenburg', 'Station Diemen-Zuid']  # end stations in a trip to flag
@@ -104,10 +104,10 @@ def download_declaration_file(browser):
     create_declaration_button = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
         expected_conditions.visibility_of_element_located((By.CSS_SELECTOR, ".vlfx9r0.vlfx9r1 .gg7hj10.gg7hj12.gg7hj19"))
     )
-    
+
     if not create_declaration_button.is_enabled():
         return False
-    
+
     click(browser, create_declaration_button)
 
     time.sleep(WAIT_BETWEEN_CLICKS)
