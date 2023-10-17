@@ -116,20 +116,19 @@ def download_declaration_file(browser):
         expected_conditions.visibility_of_element_located((By.CSS_SELECTOR, ".vlfx9r0.vlfx9r1 .gg7hj10.gg7hj12.gg7hj19"))
     )
     click(browser, download_pdf_button)
+    return True
 
+def is_declaration_file_download():
     time.sleep(WAIT_FOR_DOWNLOAD)
-    while 'declaration' not in ''.join(os.listdir(DECLARATIONS_DIR)):
-        print('Declaration download hans\'t finished, waiting')
-        time.sleep(WAIT_FOR_DOWNLOAD)
+    return 'declaration' in ''.join(os.listdir(DECLARATIONS_DIR))
 
+def back_to_trip_table(browser):
     back_to_history_button = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
         expected_conditions.visibility_of_element_located((By.CSS_SELECTOR, ".vlfx9r0.vlfx9r1 .gg7hj10.gg7hj13.gg7hj19"))
     )
     click(browser, back_to_history_button)
 
     time.sleep(WAIT_BETWEEN_CLICKS)
-
-    return True
 
 
 def rename_declaration_file(month_of_declaration):
@@ -236,7 +235,7 @@ def main():
 
         flag_relevant_events(browser, events)
 
-        print('Edit trip selection, press Enter to download declaration.')
+        print('Edit trip selection, press Enter to download declaration')
         input()
 
         print('Downloading declaration file')
@@ -244,9 +243,15 @@ def main():
             print('No events selected, skipping')
             continue
 
+        while not is_declaration_file_download():
+            print('Declaration download hans\'t finished, waiting')
+
+        back_to_trip_table(browser)
+
         print('Renaming declaration_file')
         rename_declaration_file(month)
 
+    print('No more more months to search, exiting')
 
 if __name__ == '__main__':
     main()
