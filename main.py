@@ -3,6 +3,7 @@ import re
 import time
 import traceback
 import PyPDF2
+import calendar
 
 from selenium import webdriver
 from selenium.common import TimeoutException
@@ -15,17 +16,19 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 # dates to search for relevant trips
 YEAR = 2023
-FIRST_MONTH = 3
-LAST_MONTH = 10
+FIRST_MONTH = 3 # inclusive
+LAST_MONTH = 10 # exclusive
 
 STATIONS_TO_CHECK = ['Den Haag Centraal', 'Den Haag HS']  # station that is 100% in a trip to flag
 STATIONS_AT_END = ['Diemen Zuid', 'Laan van Ypenburg', 'Station Diemen-Zuid']  # end stations in a trip to flag
 STATIONS_AT_START = ['Diemen Zuid', 'Laan van Ypenburg']  # starting stations in a trip to flag
 
 DECLARATIONS_DIR = os.getcwd() + '/declarations/'  # where pdf's are stored, directory must exist prior to running the script
+CHROME_DATA_DIR = os.getcwd() + '/chrome_data/'
 CHROME_DRIVER_PATH = os.getcwd() + '/chromedriver'
 
-WAIT_IN_SECS_BETWEEN_CLICKS = 2
+WAIT_FOR_DOWNLOAD = 5
+WAIT_BETWEEN_CLICKS = 2
 ELEMENT_TIMEOUT = 5
 
 
@@ -87,14 +90,14 @@ def go_to_trip_table(browser):
         expected_conditions.visibility_of_element_located((By.CLASS_NAME, "sga5ez3"))
     )
     click(browser, card_div)
-    time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
+    time.sleep(WAIT_BETWEEN_CLICKS)
 
     transaction_type = Select(WebDriverWait(browser, ELEMENT_TIMEOUT).until(
         expected_conditions.visibility_of_element_located((By.CLASS_NAME, "oe1wjn0"))
     ))
     transaction_type.select_by_index(1)
 
-    time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
+    time.sleep(WAIT_BETWEEN_CLICKS)
 
 
 def download_declaration_file(browser):
@@ -107,21 +110,24 @@ def download_declaration_file(browser):
     
     click(browser, create_declaration_button)
 
-    time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
+    time.sleep(WAIT_BETWEEN_CLICKS)
 
     download_pdf_button = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
         expected_conditions.visibility_of_element_located((By.CSS_SELECTOR, ".vlfx9r0.vlfx9r1 .gg7hj10.gg7hj12.gg7hj19"))
     )
     click(browser, download_pdf_button)
 
-    time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
+    time.sleep(WAIT_FOR_DOWNLOAD)
+    while 'declaration' not in ''.join(os.listdir(DECLARATIONS_DIR)):
+        print('Declaration download hans\'t finished, waiting')
+        time.sleep(WAIT_FOR_DOWNLOAD)
 
     back_to_history_button = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
         expected_conditions.visibility_of_element_located((By.CSS_SELECTOR, ".vlfx9r0.vlfx9r1 .gg7hj10.gg7hj13.gg7hj19"))
     )
     click(browser, back_to_history_button)
 
-    time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
+    time.sleep(WAIT_BETWEEN_CLICKS)
 
     return True
 
@@ -171,14 +177,25 @@ def fetch_events_for_month(browser, month):
         expected_conditions.visibility_of_element_located((By.ID, "startDate"))
     )
 
-    search_date = f'{1}-{month}-{YEAR}'
+    to_date = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
+        expected_conditions.visibility_of_element_located((By.ID, "endDate"))
+    )
+
+    start_date = f'{1}-{month}-{YEAR}'
+    end_date = f'{calendar.monthrange(YEAR, month)[1]}-{month}-{YEAR}'
+
     while not from_date.get_attribute('value') == "":
         from_date.send_keys(Keys.BACK_SPACE)
-    from_date.send_keys(search_date)
+    from_date.send_keys(start_date)
     from_date.send_keys(Keys.ESCAPE)
 
+    while not to_date.get_attribute('value') == "":
+        to_date.send_keys(Keys.BACK_SPACE)
+    to_date.send_keys(end_date)
+    to_date.send_keys(Keys.ESCAPE)
+
     try:
-        table_elements = WebDriverWait(browser, WAIT_IN_SECS_BETWEEN_CLICKS).until(
+        table_elements = WebDriverWait(browser, WAIT_BETWEEN_CLICKS).until(
             expected_conditions.visibility_of_all_elements_located((By.CLASS_NAME, 'ag-cell'))
         )
 
@@ -208,7 +225,7 @@ def main():
 
     go_to_trip_table(browser)
 
-    for month in range(FIRST_MONTH, LAST_MONTH):
+    for month in range(FIRST_MONTH, LAST_MONTH + 1):
         print(f'Searching for data on month {month} of {YEAR}')
         events = fetch_events_for_month(browser, month)
         if len(events) == 0:
