@@ -1,8 +1,11 @@
-import json
+import os
+import re
 import time
 import traceback
+import PyPDF2
 
 from selenium import webdriver
+from selenium.common import TimeoutException
 from selenium.webdriver import Keys
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -10,29 +13,53 @@ from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
 
-from trip_data.SingleTripData import SingleTripData
-
+# dates to search for relevant trips
 YEAR = 2023
-FIRST_MONTH = 4
-LAST_MONTH = 6
+FIRST_MONTH = 3
+LAST_MONTH = 10
+
+STATIONS_TO_CHECK = ['Den Haag Centraal', 'Den Haag HS']  # station that is 100% in a trip to flag
+STATIONS_AT_END = ['Diemen Zuid', 'Laan van Ypenburg', 'Station Diemen-Zuid']  # end stations in a trip to flag
+STATIONS_AT_START = ['Diemen Zuid', 'Laan van Ypenburg']  # starting stations in a trip to flag
+
+DECLARATIONS_DIR = os.getcwd() + '/declarations/'  # where pdf's are stored, directory must exist prior to running the script
+CHROME_DRIVER_PATH = os.getcwd() + '/chromedriver'
 
 WAIT_IN_SECS_BETWEEN_CLICKS = 2
 ELEMENT_TIMEOUT = 5
 
-IGNORE_DAYS = ['Saturday', 'Sunday']
-def parse_row_elements(row_elements):
+
+class Event:
+    def __init__(self, checkbox, week_day, event_date, event_time, station, transaction, fare, details):
+        self.checkbox = checkbox
+        self.week_day = week_day
+        self.event_date = event_date
+        self.event_time = event_time
+        self.station = station
+        self.transaction = transaction
+        self.fare = fare
+        self.details = details
+
+
+def parse_trip_table_row(row_elements):
+    checkbox = row_elements[0].find_element(By.TAG_NAME, 'input')
     raw_event_date, event_time, station, transaction, raw_fare, details = list(map(lambda element: element.text, row_elements))
 
     fare = None if raw_fare == '' else float(raw_fare.split(' ')[1].replace(',', '.'))
-    week_day, event_date = event_time.split(' ')
-    return SingleTripData(week_day, event_date, event_time, station, transaction, fare, details)
+    week_day, event_date = raw_event_date.split(' ')
+    return Event(checkbox, week_day, event_date, event_time, station, transaction, fare, details)
 
-def main():
-    print('Opening browser')
 
+def click(browser, element):
+    browser.execute_script("arguments[0].click();", element)
+
+
+def load_browser():
     try:
-        chrome_service = Service('./chromedriver')
+        chrome_service = Service(CHROME_DRIVER_PATH)
         options = webdriver.ChromeOptions()
+        prefs = {"download.default_directory": DECLARATIONS_DIR}
+        options.add_experimental_option('prefs', prefs)
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
         options.set_capability('unhandledPromptBehavior', 'accept')
@@ -41,24 +68,25 @@ def main():
         browser = webdriver.Chrome(service=chrome_service, options=options)
         browser.delete_all_cookies()
         browser.execute_script("location.reload(true);")
-    except Exception:
+    except:
         traceback.print_exc()
         print('Failed to load chromedriver. Exiting.')
         exit()
+    return browser
 
-    while True:
-        browser.get('https://www.ov-chipkaart.nl/en/my-ov-chip/my-travel-history')
-        WebDriverWait(browser, ELEMENT_TIMEOUT).until(lambda _: ('authenticationendpoint' in browser.current_url) or (browser.find_element(By.CLASS_NAME, "sga5ez3")))
-        if 'authenticationendpoint' in browser.current_url:
-            print('Please login and press Enter.')
-            input()
-        else:
-            break
 
+def is_authenticated(browser):
+    browser.get('https://www.ov-chipkaart.nl/en/my-ov-chip/my-travel-history')
+    WebDriverWait(browser, ELEMENT_TIMEOUT).until(
+        lambda _: ('authenticationendpoint' in browser.current_url) or (browser.find_element(By.CLASS_NAME, "sga5ez3")))
+    return 'authenticationendpoint' not in browser.current_url
+
+
+def go_to_trip_table(browser):
     card_div = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
         expected_conditions.visibility_of_element_located((By.CLASS_NAME, "sga5ez3"))
     )
-    card_div.click()
+    click(browser, card_div)
     time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
 
     transaction_type = Select(WebDriverWait(browser, ELEMENT_TIMEOUT).until(
@@ -68,43 +96,139 @@ def main():
 
     time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
 
+
+def download_declaration_file(browser):
+    create_declaration_button = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
+        expected_conditions.visibility_of_element_located((By.CSS_SELECTOR, ".vlfx9r0.vlfx9r1 .gg7hj10.gg7hj12.gg7hj19"))
+    )
+    
+    if not create_declaration_button.is_enabled():
+        return False
+    
+    click(browser, create_declaration_button)
+
+    time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
+
+    download_pdf_button = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
+        expected_conditions.visibility_of_element_located((By.CSS_SELECTOR, ".vlfx9r0.vlfx9r1 .gg7hj10.gg7hj12.gg7hj19"))
+    )
+    click(browser, download_pdf_button)
+
+    time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
+
+    back_to_history_button = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
+        expected_conditions.visibility_of_element_located((By.CSS_SELECTOR, ".vlfx9r0.vlfx9r1 .gg7hj10.gg7hj13.gg7hj19"))
+    )
+    click(browser, back_to_history_button)
+
+    time.sleep(WAIT_IN_SECS_BETWEEN_CLICKS)
+
+    return True
+
+
+def rename_declaration_file(month_of_declaration):
+    file_to_rename = DECLARATIONS_DIR + [file_name for file_name in os.listdir(DECLARATIONS_DIR) if 'declaration' in file_name][0]
+    declaration_text = PyPDF2.PdfReader(file_to_rename).pages[0].extract_text()
+    total_fare = re.search('Total.expenses.€..(.*).Including', declaration_text).group(1)
+    new_name = f'{DECLARATIONS_DIR}month_{month_of_declaration}_fare_{total_fare}eu.pdf'
+    os.rename(file_to_rename, new_name)
+
+
+def flag_relevant_events(browser, events):
+    i = 0
+    while i < len(events):
+        single_trip_data = events[i]
+        if single_trip_data.station in STATIONS_TO_CHECK:
+            forward_pointer = back_pointer = i
+            click(browser, single_trip_data.checkbox)
+
+            while back_pointer - 1 >= 0:
+                back_pointer -= 1
+                previous_trip = events[back_pointer]
+                if previous_trip.event_date != single_trip_data.event_date:
+                    break
+                if not previous_trip.checkbox.is_selected():
+                    click(browser, previous_trip.checkbox)
+                if previous_trip.station in STATIONS_AT_END:
+                    break
+
+            while forward_pointer + 1 < len(events):
+                forward_pointer += 1
+                next_trip = events[forward_pointer]
+                if next_trip.event_date != single_trip_data.event_date:
+                    break
+                click(browser, next_trip.checkbox)
+                if next_trip.station in STATIONS_AT_START:
+                    break
+
+            i = forward_pointer
+        i += 1
+
+
+
+def fetch_events_for_month(browser, month):
     from_date = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
         expected_conditions.visibility_of_element_located((By.ID, "startDate"))
     )
 
-    travel_data = []
+    search_date = f'{1}-{month}-{YEAR}'
+    while not from_date.get_attribute('value') == "":
+        from_date.send_keys(Keys.BACK_SPACE)
+    from_date.send_keys(search_date)
+    from_date.send_keys(Keys.ESCAPE)
+
+    try:
+        table_elements = WebDriverWait(browser, WAIT_IN_SECS_BETWEEN_CLICKS).until(
+            expected_conditions.visibility_of_all_elements_located((By.CLASS_NAME, 'ag-cell'))
+        )
+
+        return [parse_trip_table_row(table_elements[i:i + 6]) for i in range(0, len(table_elements), 6)]
+    except TimeoutException:
+        return []
 
 
-    for month in range(FIRST_MONTH, LAST_MONTH + 1):
-        search_date = f'{1}-{month}-{YEAR}'
+def deselect_all_events(browser):
+    select_all_checkbox = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
+        expected_conditions.presence_of_element_located((By.ID, 'ag-5-input'))
+    )
+    click(browser, select_all_checkbox)
+
+
+def main():
+    if not os.path.isdir(DECLARATIONS_DIR):
+        print(f'Output director "{DECLARATIONS_DIR}" does\'t exist, please create the directory.')
+        exit()
+
+    print('Opening browser')
+    browser = load_browser()
+
+    while not is_authenticated(browser):
+        print('Please login and press Enter.')
+        input()
+
+    go_to_trip_table(browser)
+
+    for month in range(FIRST_MONTH, LAST_MONTH):
         print(f'Searching for data on month {month} of {YEAR}')
-        while not from_date.get_attribute('value') == "":
-            from_date.send_keys(Keys.BACK_SPACE)
-        from_date.send_keys(search_date)
-        from_date.send_keys(Keys.ESCAPE)
-
-        try:
-            table_elements = WebDriverWait(browser, WAIT_IN_SECS_BETWEEN_CLICKS).until(
-                expected_conditions.visibility_of_all_elements_located((By.CLASS_NAME, 'ag-cell'))
-            )
-
-            select_all_checkbox = WebDriverWait(browser, ELEMENT_TIMEOUT).until(
-                expected_conditions.presence_of_element_located((By.ID, 'ag-5-input'))
-            )
-            select_all_checkbox.click()
-
-            for i in range(0, len(table_elements), 6):
-                single_trip_data = parse_row_elements(table_elements[i:i + 6])
-                # TODO: select only relevant checkboxes
-
-            # TODO: download the pdf
-
-        except Exception:
+        events = fetch_events_for_month(browser, month)
+        if len(events) == 0:
             print(f'No data found on month {month} of {YEAR}')
             continue
 
-    with open('data.json', 'w') as file:
-        file.write(json.dumps(travel_data))
+        deselect_all_events(browser)
+
+        flag_relevant_events(browser, events)
+
+        print('Edit trip selection, press Enter to download declaration.')
+        input()
+
+        print('Downloading declaration file')
+        if not download_declaration_file(browser):
+            print('No events selected, skipping')
+            continue
+
+        print('Renaming declaration_file')
+        rename_declaration_file(month)
 
 
 if __name__ == '__main__':
